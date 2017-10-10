@@ -609,6 +609,92 @@ func (cl Color) DistanceCIE94(cr Color) float64 {
     return math.Sqrt(vL2 + vC2 + vH2)*0.01  // See above.
 }
 
+const pi = math.Pi
+
+// Uses the CIE2000 formula to calculate color distance. More accurate than
+// DistanceLab, but also more work.
+func (cl Color) DistanceCIE2000(cr Color) float64 {
+	l1, a1, b1 := cl.Lab()
+	l2, a2, b2 := cr.Lab()
+
+	// NOTE: Since all those formulas expect L,a,b values 100x larger than we
+	//       have them in this library, we either need to adjust all constants
+	//       in the formula, or convert the ranges of L,a,b before, and then
+	//       scale the distances down again. The latter is less error-prone.
+	l1, a1, b1 = l1*100.0, a1*100.0, b1*100.0
+	l2, a2, b2 = l2*100.0, a2*100.0, b2*100.0
+
+	kl := 1.0 // common default weightings for CIE 2000
+	kc := 1.0
+	kh := 1.0
+
+	lBarPrime := (l1 + l2) * 0.5
+	c1 := math.Sqrt(a1*a1 + b1*b1)
+	c2 := math.Sqrt(a2*a2 + b2*b2)
+	cBar := (c1 + c2) * 0.5
+
+	cBar7 := cBar * cBar * cBar
+	cBar7 *= cBar7 * cBar
+	g := 0.5 * (1.0 - math.Sqrt(cBar7/(cBar7+6103515625.0))) // 25**7
+
+	a1Prime := (1.0 + g) * a1
+	a2Prime := (1.0 + g) * a2
+
+	c1Prime := math.Sqrt(a1Prime*a1Prime + b1*b1)
+	c2Prime := math.Sqrt(a2Prime*a2Prime + b2*b2)
+
+	cBarPrime := (c1Prime + c2Prime) * 0.5
+
+	h1Prime := math.Atan2(b1, a1Prime)
+	if h1Prime < 0 {
+		h1Prime += 2 * pi
+	}
+	h2Prime := math.Atan2(b2, a2Prime)
+	if h2Prime < 0 {
+		h2Prime += 2 * pi
+	}
+
+	hBarPrime := (h1Prime + h2Prime) * 0.5
+	dhPrime := h2Prime - h1Prime
+	if math.Abs(dhPrime) > pi {
+		hBarPrime += pi
+		if h2Prime <= h1Prime {
+			dhPrime += 2 * pi
+		} else {
+			dhPrime -= 2 * pi
+		}
+	}
+
+	t := 1.0 -
+		0.17*math.Cos(hBarPrime-pi/6) +
+		0.24*math.Cos(2.0*hBarPrime) +
+		0.32*math.Cos(3.0*hBarPrime+pi/30) -
+		0.20*math.Cos(4.0*hBarPrime-63.0*pi/180)
+
+	dLPrime := l2 - l1
+	dCPrime := c2Prime - c1Prime
+	dHPrime := 2.0 * math.Sqrt(c1Prime*c2Prime) * math.Sin(dhPrime/2.0)
+
+	lBarPrimeM50Sqr := lBarPrime - 50.0
+	lBarPrimeM50Sqr *= lBarPrimeM50Sqr
+	sL := 1.0 + (0.015*lBarPrimeM50Sqr)/math.Sqrt(20.0+lBarPrimeM50Sqr)
+	sC := 1.0 + 0.045*cBarPrime
+	sH := 1.0 + 0.015*cBarPrime*t
+
+	hBarPrimeM := (180/pi*hBarPrime - 275.0) / 25.0
+	dTheta := pi / 6 * math.Exp(-hBarPrimeM*hBarPrimeM)
+	cBarPrime7 := cBarPrime * cBarPrime * cBarPrime
+	cBarPrime7 *= cBarPrime7 * cBarPrime
+	rC := math.Sqrt(cBarPrime7 / (cBarPrime7 + 6103515625.0))
+	rT := -2.0 * rC * math.Sin(2.0*dTheta)
+
+	return math.Sqrt(
+		sq(dLPrime/(kl*sL)) +
+			sq(dCPrime/(kc*sC)) +
+			sq(dHPrime/(kh*sH)) +
+			(dCPrime/(kc*sC))*(dHPrime/(kh*sH))*rT)
+}
+
 // BlendLab blends two colors in the L*a*b* color-space, which should result in a smoother blend.
 // t == 0 results in c1, t == 1 results in c2
 func (c1 Color) BlendLab(c2 Color, t float64) Color {
